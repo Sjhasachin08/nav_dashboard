@@ -67,6 +67,10 @@ const upvalyHolidayState = {
 /* ─── DOM ───────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 
+if (window.DISABLE_NAV_LEDGER) {
+  document.querySelectorAll('.dash-tile--calcagr, .dash-tile--calsip, .dash-tile--sip').forEach(tile => tile.remove());
+}
+
 let sessionRedirecting = false;
 function redirectToLogin() {
   if (sessionRedirecting) return;

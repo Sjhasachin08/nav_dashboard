@@ -14,7 +14,9 @@ const adminRoutes = require('./routes/admin');
 const syncRoutes = require('./routes/sync');
 const ruleEngineRoutes = require('./routes/ruleEngine');
 const staticFundDataRoutes = require('./routes/staticFundData');
-const navLedgerRouter = require('./nav-ledger/router');
+const NAV_LEDGER_DISABLED = process.env.DISABLE_NAV_LEDGER === 'true';
+const AUTO_SYNC_DISABLED = process.env.DISABLE_AUTO_SYNC === 'true';
+const navLedgerRouter = NAV_LEDGER_DISABLED ? null : require('./nav-ledger/router');
 const sessionStore = require('./utils/sessionStore');
 const syncService = require('./services/syncService');
 const { requireAuth, requireAdmin } = require('./middleware/auth');
@@ -91,14 +93,24 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 // static would otherwise find and serve public/nav-ledger/index.html
 // directly (bypassing this auth check) before this route ever ran. Same
 // treatment for the two Calendar Year dashboards added alongside it.
-app.get(['/nav-ledger', '/nav-ledger/', '/nav-ledger/index.html'], requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'nav-ledger', 'index.html'));
-});
-app.get('/nav-ledger/calendar-returns.html', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'nav-ledger', 'calendar-returns.html'));
-});
-app.get('/nav-ledger/calendar-sip-lumpsum.html', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'nav-ledger', 'calendar-sip-lumpsum.html'));
+if (navLedgerRouter) {
+  app.get(['/nav-ledger', '/nav-ledger/', '/nav-ledger/index.html'], requireAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'nav-ledger', 'index.html'));
+  });
+  app.get('/nav-ledger/calendar-returns.html', requireAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'nav-ledger', 'calendar-returns.html'));
+  });
+  app.get('/nav-ledger/calendar-sip-lumpsum.html', requireAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'nav-ledger', 'calendar-sip-lumpsum.html'));
+  });
+} else {
+  app.get(['/nav-ledger', '/nav-ledger/', '/nav-ledger/index.html', '/nav-ledger/calendar-returns.html', '/nav-ledger/calendar-sip-lumpsum.html'], requireAuth, (_req, res) => {
+    res.status(404).send('This dashboard is not available on the Render free tier.');
+  });
+}
+
+app.get('/deployment-config.js', (_req, res) => {
+  res.type('application/javascript').send(`window.DISABLE_NAV_LEDGER = ${NAV_LEDGER_DISABLED};`);
 });
 
 // Serve static assets (css/js/images). `index: false` stops express from
@@ -127,7 +139,13 @@ app.use('/api', requireAuth, staticFundDataRoutes);
 // check used for the rest of the site. Must be registered before the
 // catch-all SPA route below, or every request here would just get served
 // this project's own index.html instead.
-app.use('/nav-ledger-api', requireAuth, navLedgerRouter);
+if (navLedgerRouter) {
+  app.use('/nav-ledger-api', requireAuth, navLedgerRouter);
+} else {
+  app.use('/nav-ledger-api', requireAuth, (_req, res) => {
+    res.status(404).json({ error: 'This dashboard is not available on the Render free tier.' });
+  });
+}
 
 // ── Pages ──────────────────────────────────────────────
 app.get('/login', (req, res) => {
@@ -180,27 +198,29 @@ app.listen(PORT, () => {
   // This only (re)computes schemes that are missing or >24h old — after
   // the first full run this is fast. Use the "Sync" button in the UI to
   // force a full refresh on demand.
-  const AUTO_SYNC_DELAY_MS = Number(process.env.AUTO_SYNC_DELAY_MS || 1000);
-  setTimeout(() => {
-    console.log('🔄 Starting background Returns/Rolling-Returns sync (incremental)…');
-    syncService.runSync({ force: false })
-      .then(status => {
-        console.log(`   Sync queued: ${status.total} scheme(s) to process (${status.skipped} already fresh).`);
-      })
-      .catch(err => {
-        console.error('   Background sync failed to start:', err.message);
-      });
-  }, AUTO_SYNC_DELAY_MS);
+  if (AUTO_SYNC_DISABLED) {
+    console.log('⏸️ Background sync is disabled by configuration.');
+  } else {
+    const AUTO_SYNC_DELAY_MS = Number(process.env.AUTO_SYNC_DELAY_MS || 1000);
+    setTimeout(() => {
+      console.log('🔄 Starting background Returns/Rolling-Returns sync (incremental)…');
+      syncService.runSync({ force: false })
+        .then(status => {
+          console.log(`   Sync queued: ${status.total} scheme(s) to process (${status.skipped} already fresh).`);
+        })
+        .catch(err => {
+          console.error('   Background sync failed to start:', err.message);
+        });
+    }, AUTO_SYNC_DELAY_MS);
 
-  // Full re-sync of EVERY scheme, automatically, once a day at 9:00 PM
-  // (server local time), for as long as this process keeps running.
-  // Override the time via env vars if needed, e.g. AUTO_SYNC_DAILY_HOUR=22.
-  const DAILY_SYNC_HOUR = Number(process.env.AUTO_SYNC_DAILY_HOUR ?? 21);
-  const DAILY_SYNC_MINUTE = Number(process.env.AUTO_SYNC_DAILY_MINUTE ?? 0);
-  syncService.scheduleDailyFullSync({ hour: DAILY_SYNC_HOUR, minute: DAILY_SYNC_MINUTE });
+    const DAILY_SYNC_HOUR = Number(process.env.AUTO_SYNC_DAILY_HOUR ?? 21);
+    const DAILY_SYNC_MINUTE = Number(process.env.AUTO_SYNC_DAILY_MINUTE ?? 0);
+    syncService.scheduleDailyFullSync({ hour: DAILY_SYNC_HOUR, minute: DAILY_SYNC_MINUTE });
+  }
 
-  // NAV Ledger's own warm-up (pre-computes CAGR + Rolling Returns for every
-  // scheme in its dataset) and its own daily 9:30 PM AMFI refresh — fully
-  // independent of this project's sync above.
-  navLedgerRouter.init();
+  if (navLedgerRouter) {
+    navLedgerRouter.init();
+  } else {
+    console.log('⏸️ NAV Ledger is disabled by configuration.');
+  }
 });

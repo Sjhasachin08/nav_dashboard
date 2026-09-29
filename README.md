@@ -250,20 +250,23 @@ CPU/network at the same moment).
 
 ### Render deployment
 
-The generated Rule Engine dataset is intentionally excluded from Git because
-`master.json` is several hundred MB. The Render build must create it before the
-service starts. Use these service settings (or deploy the included
-`render.yaml` as a Blueprint):
+The included `render.yaml` targets Render's free web-service plan and deploys
+the main NAV dashboard from the tracked `data/navdata.json` file. Its build
+uses `npm ci`; it does not build or load the Rule Engine's several-hundred-MB
+dataset, because that needs roughly 3–4 GB of RAM. The Rule Engine and its
+calendar dashboards, along with automatic bulk sync, are disabled in this
+free-tier deployment. Local development keeps them enabled by default.
 
 ```text
-Build Command: npm install && npm run nav-ledger:build-data
+Build Command: npm ci
 Start Command: npm start
 Health Check Path: /login
 ```
 
-Set a strong `SESSION_SECRET` in Render Environment Variables. A Render
-instance without persistent storage will need to rebuild this dataset after a
-fresh instance is created.
+Render generates `SESSION_SECRET` and trusts its reverse proxy. The free
+service has ephemeral storage: user accounts, sessions, imported fund
+profiles, launch-date edits, and calculated caches can reset after a restart
+or redeploy. The ignored local SQLite databases are not included in Git.
 
 ### Routes this adds
 
